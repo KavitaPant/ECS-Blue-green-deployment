@@ -1,0 +1,395 @@
+ECS Blue-Green Deployment Using Gitlab CI/CD 
+
+In today’s world, deploying an application in a production environment with zero downtime is crucial. A blue-green deployment is one of the methods that help achieve zero downtime. In this post, we will implement a blue-green deployment on the ECS service from GitLab with the help of the CodePipeline service.
+About the project:
+Blue-Green Deployment is a deployment strategy that enables you to release new versions of your application with zero downtime and minimal risk of failure. This tutorial will implement Blue-Green Deployment using GitLab CI and AWS CodePipeline, a fully managed continuous integration and delivery service. We will use Terraform to create the necessary infrastructure, including an Elastic Container Service (ECS) cluster, an EC2 Container Registry (ECR), and an S3 bucket for storing artifacts. We will configure the GitLab project to trigger the AWS CodePipeline and deploy the application automatically. We will also use AWS CodeDeploy to swap traffic seamlessly from the old to the new version of the application.
+
+Why Continuous Integration?
+Continuous integration is a software development practice of frequently integrating the code changes from multiple contributors into a shared repository preferably several times a day. Each integration is verified by an automated build (including test) to detect integration errors as quickly as possible and later deploy the changes made.
+Some of the benefits that continuous integration will bring to your organization are:
+Quickly fixing out the bug every time a new change is made.
+Reduce time in digging for bugs and spending more time writing awesome code.
+Speeding things with automated tests and builds to deliver your software more quickly.
+Increase team transparency and collaboration.
+Faster deployments of new features to the majority of cloud providers.
+Prerequisites
+Since this post shows how to configure your .gitlab-ci.yml file for CI/CD of your Python-Django application, it is assumed that you have:
+Created an account on GitLab.
+Installed and configured your GitLab runner (however we are going to make use of GitLab shared runners).
+An existing AWS account with its credentials stored securely.
+AWS EC2 instance as the target for each of the environments namely, development, staging, and production.
+AWS S3 bucket for storing the application revisions and to use it with AWS CodeDeploy.
+AWS CodeDeploy application and group with deployment target as the EC2 instance (usually the recommendation is to create a CodeDeploy application with three groups for each environment such as development, staging, and production followed by an appropriate naming convention). For more information on getting started with CodeDeploy, click here.
+                   and that’s it, this is all you need to set up GitLab CI/CD pipeline.
+Create an IAM User
+Create an IAM User with following policies and roles 👉:
+Login to AWS account → Search IAM → Create User—> Create Access and Secret key →Add permissions —> Attach following policies
+
+Go to Roles —> Search for codedeploy and taskdefinition→ Attach the following roles:
+
+
+
+Create an ECR repository and push the image
+Search ECR → Create Repository —> View Push commands 
+# Use an official Node.js runtime as a parent image
+FROM node:18.17.1-alpine
+
+
+# Set the working directory inside the container
+WORKDIR /app
+
+
+# Copy package.json and package-lock.json to the container
+COPY package*.json ./
+
+
+# Install project dependencies
+RUN npm install --legacy-peer-deps
+
+
+# Copy the rest of the application code to the container
+COPY . .
+
+
+# Build the React.js app using the provided build command
+RUN npm run build
+
+
+# Expose port 80 (the default for HTTP traffic)
+EXPOSE 8000
+
+
+# Start the React.js app
+CMD ["npm", "start"]
+
+
+Copy and Paste the View Push commands from AWS ECR Console on AWS CLI.After push you will find the image on ECR.
+
+
+https://aws.amazon.com/ecs/
+Amazon Elastic Container Service (ECS) is a container management service, which allows us to run our docker containers directly on managed clusters of amazon EC2 instances or the serverless compute engine Fargate.
+ECS eliminates the need for us manually operating the cluster, saving us from a lot of headaches. Complex tasks like scaling servers up and down can be done in just a few clicks.
+ECS uses ECR(Elastic Container Registry) to store our docker images. We can specify whichever image we want to use in our application.
+
+
+Create an ECS Task Definition 
+Search for ECS—> Go to Task Definition —> Mention the Container name/ Image URI/ Container port and Host port 
+Attach created task execution role
+Select Network mode as ‘bridge’
+Click on ‘Create’
+Create an ECS Cluster for Blue-green deployment for EC2 launch type
+
+Click on ‘Create Cluster’ —> Name it —> Select Launch type as EC2 
+
+Select Instance type based on your image size and Create a new SSH key pair 
+
+Network Settings will be the same as per default VPC and Security group of AWS account.
+Click on Create
+Create a Service for ECS tasks 
+Go to Cluster—> Click on Create Service →  Launch type as ‘EC2’ 
+Select task definition created and uncheck the manual task revision
+ Select Deployment type as ‘Blue-green’ and It will auto-assign the role from IAM 
+Click on create Load Balancer —> Select Network LB → Name it 
+
+Give a desired listener port of NLB.
+Click on Create Target Group and assign the same values in mentioned image
+Here you need to create Two target groups for ECS because of blue-green deployment. (ecs-tgt1 for BLUE and ecs-tg2 for GREEN deployment)
+
+Select default VPC and Security group. Click on Security Group —> Add Inbound rule → Mention the Custom TCP port based on your application.
+
+
+Click on Create
+
+Optional 
+For testing purposes of B/G deployment, You can use two desired different images like nginx and httpd as B/G requires two revisions for the same task definition.
+Integrating with Gitlab CICD
+Note: You will need your role to be either Maintainer or Owner
+Go to Settings —>  CICD —> Runners —> Showrunner install instructions       
+Create an EC2 Instance and follow the above image procedure to install gitlab-runner and select executor as shell.
+Go to Gitlab and confirm runner is active 
+Add the environment variables 
+Now add .gitlab-ci.yml to your repository and add the following
+
+
+
+
+image: docker:latest
+
+
+services:
+   - docker:dind
+
+
+
+
+variables:
+  GITLAB_REPO: https://gitlab.com/r_site_api.git
+  REPOSITORY_URL: dkr.ecr.us-east-1.amazonaws.com/demo
+  TASK_DEFINITION_NAME: $CI_AWS_ECS_TASK_DEFINITION
+  CLUSTER_NAME: $CI_AWS_ECS_CLUSTER
+  SERVICE_NAME: $CI_AWS_ECS_SERVICE
+  CODEDEPLOY_APPLICATION_NAME: $CODEDEPLOY_APPLICATION_NAME
+  CODEDEPLOY_DEPLOYMENT_GROUP: $CODEDEPLOY_DEPLOYMENT_GROUP
+  CI_COMMIT_SHA: $CI_COMMIT_SHA
+ 
+before_script:  
+  - sudo apt-get update -y
+  - sudo apt-get install python3 python3-pip -y
+  - sudo apt install python3.10-venv -y
+  - sudo python3 -m venv /path/to/venv
+  - sudo pip install mypackage
+  - sudo apt install nodejs npm -y
+  - node -v
+  - sudo pip install git-remote-codecommit
+  - sudo apt-get install zip
+  - curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+  - sudo apt-get install unzip -y
+  - unzip awscliv2.zip
+  - sudo ./aws/install --update
+  - sudo bash -c 'alias aws=awsv2'
+  - sudo aws --version
+  - aws configure set aws_access_key_id $AWS_ACCESS_KEY_ID
+  - aws configure set aws_secret_access_key $AWS_SECRET_ACCESS_KEY
+  - aws configure set region $AWS_DEFAULT_REGION
+  - $(aws ecr get-login --no-include-email --region "${AWS_DEFAULT_REGION}")
+  - IMAGE_TAG="$(echo $CI_COMMIT_SHA | head -c 8)"
+  - echo "${IMAGE_TAG}"
+
+
+stages:
+  - build
+  - deploy
+
+
+build:
+  stage: build
+  script:
+    - sudo npm install -g n
+    - sudo n lts
+    - node --version
+    - echo "Building image...."
+    - docker build -t $REPOSITORY_URL:latest .
+    - echo "Tagging image..."
+    - docker tag $REPOSITORY_URL:latest ${REPOSITORY_URL}:${IMAGE_TAG}
+    - echo "Pushing image..."
+    - docker push $REPOSITORY_URL:latest
+    - docker push ${REPOSITORY_URL}:${IMAGE_TAG}
+  only:
+    - ecs-test1
+  tags:
+    - blue-green
+    - cicd
+
+
+deploy:
+  stage: deploy
+  script:
+    - echo $REPOSITORY_URL:$IMAGE_TAG ; sudo apt install jq -y
+    - echo "Family Name:${TASK_DEFINITION_NAME}"
+    - TASK_DEFINITION=$(aws ecs describe-task-definition --task-definition "$TASK_DEFINITION_NAME" --region "${AWS_DEFAULT_REGION}")
+    - NEW_CONTAINER_DEFINITION=$(echo $TASK_DEFINITION | jq --arg IMAGE "$REPOSITORY_URL:$IMAGE_TAG" '.taskDefinition.containerDefinitions[0].image = $IMAGE | .taskDefinition.containerDefinitions[0] | .cpu=512 | .memory = 1024')
+    - echo "Registering new container definition..."
+    - NEW_TASK_DEFINITION_ARN=$(aws ecs register-task-definition --region "${AWS_DEFAULT_REGION}" --family "${TASK_DEFINITION_NAME}" --container-definitions "${NEW_CONTAINER_DEFINITION}" --query 'taskDefinition.taskDefinitionArn' --output text)
+    - TASK_DEFINITION_ARN_LIST=$(aws ecs list-task-definitions --family-prefix "${TASK_DEFINITION_NAME}" --region "${AWS_DEFAULT_REGION}" --status ACTIVE --query 'taskDefinitionArns' --output json)
+    - LATEST_REVISION=$(echo $TASK_DEFINITION_ARN_LIST | jq -r '.[-1]')
+    # Loop through older revisions and deregister them
+    - |
+      for REVISION in $(echo "${TASK_DEFINITION_ARN_LIST}" | jq -r '.[]'); do
+        if [ "${REVISION}" != "${LATEST_REVISION}" ]; then
+          echo "Deregistering old revision: ${REVISION}"
+          aws ecs deregister-task-definition --region "${AWS_DEFAULT_REGION}" --task-definition "${REVISION}"
+        fi
+      done
+    - echo "New ECS Task Definition ARN:${NEW_TASK_DEFINITION_ARN}"
+    - jq --arg newTaskDef "$NEW_TASK_DEFINITION_ARN" '.version |= 1 | .Resources[].TargetService.Properties.TaskDefinition = $newTaskDef' appspec.json > tmpfile && mv tmpfile appspec.json
+    - cat create-deployment.json
+    - cat appspec.json
+    - zip appspec.zip appspec.json
+    - size1=$(du -h appspec.json | cut -f1)
+    - size2=$(du -h appspec.zip | cut -f1)
+    - echo "Size of appspec.json:$size1"
+    - echo "Size of appspec.zip:$size2"
+    - aws s3 cp appspec.json s3://api-app-deployment/
+    - echo "Creating Codedeploy deployment .."
+    - aws deploy create-deployment --application-name "AppECS-da-cluster-newsvc" --cli-input-json file://create-deployment.json --region "us-east-1" --deployment-config-name "CodeDeployDefault.ECSAllAtOnce"
+  only:
+    - ecs-test1
+  tags:
+    - blue-green
+    - cicd
+
+
+
+
+   
+ Let’s go through it bit by bit
+image: docker:latest
+
+
+services:
+   - docker:dind
+ 
+  This is needed to build docker based builds. You can find more info here.
+variables:
+  GITLAB_REPO: https://gitlab.com/r_site_api.git
+  REPOSITORY_URL: dkr.ecr.us-east-1.amazonaws.com/demo
+  TASK_DEFINITION_NAME: $CI_AWS_ECS_TASK_DEFINITION
+  CLUSTER_NAME: $CI_AWS_ECS_CLUSTER
+  SERVICE_NAME: $CI_AWS_ECS_SERVICE
+  CODEDEPLOY_APPLICATION_NAME: $CODEDEPLOY_APPLICATION_NAME
+  CODEDEPLOY_DEPLOYMENT_GROUP: $CODEDEPLOY_DEPLOYMENT_GROUP
+  CI_COMMIT_SHA: $CI_COMMIT_SHA
+
+
+Here you need to mention the values based on your ECS resource names.
+before_script:  
+  - sudo apt-get update -y
+  - sudo apt-get install python3 python3-pip -y
+  - sudo apt install python3.10-venv -y
+  - sudo python3 -m venv /path/to/venv
+  - sudo pip install mypackage
+  - sudo apt install nodejs npm -y
+  - node -v
+  - sudo pip install git-remote-codecommit
+  - sudo apt-get install zip
+  - curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+  - sudo apt-get install unzip -y
+  - unzip awscliv2.zip
+  - sudo ./aws/install --update
+  - sudo bash -c 'alias aws=awsv2'
+  - sudo aws --version
+  - aws configure set aws_access_key_id $AWS_ACCESS_KEY_ID
+  - aws configure set aws_secret_access_key $AWS_SECRET_ACCESS_KEY
+  - aws configure set region $AWS_DEFAULT_REGION
+  - $(aws ecr get-login --no-include-email --region "${AWS_DEFAULT_REGION}")
+  - IMAGE_TAG="$(echo $CI_COMMIT_SHA | head -c 8)"
+  - echo "${IMAGE_TAG}"
+
+
+Here it installs requirements jq, python, pip, nodejs, npm and aws-cli with version 2. Then we configure the aws-cli so that it can connect to our AWS account. Next we login to ECR. And finally we set the IMAGE_TAG variable.
+stages:
+  - build
+  - deploy
+ 
+Here we define the stages of our pipeline. Right now, we only have the build and deploy stage, but we can easily add steps for unit testing, integration tests etc.
+build:
+  stage: build
+  script:
+    - sudo npm install -g n
+    - sudo n lts
+    - node --version
+    - echo "Building image...."
+    - docker build -t $REPOSITORY_URL:latest .
+    - echo "Tagging image..."
+    - docker tag $REPOSITORY_URL:latest ${REPOSITORY_URL}:${IMAGE_TAG}
+    - echo "Pushing image..."
+    - docker push $REPOSITORY_URL:latest
+    - docker push ${REPOSITORY_URL}:${IMAGE_TAG}
+  only:
+    - ecs-test1
+
+
+Here we build the image, then tag the image with both latest and IMAGE_TAG. We do this so that if something goes bad, we can rollback to a stable version. Finally we push it. And all this happens when we merge/commit on the master branch.
+deploy:
+  stage: deploy
+  script:
+    - echo $REPOSITORY_URL:$IMAGE_TAG ; sudo apt install jq -y
+    - echo "Family Name:${TASK_DEFINITION_NAME}"
+    - TASK_DEFINITION=$(aws ecs describe-task-definition --task-definition "$TASK_DEFINITION_NAME" --region "${AWS_DEFAULT_REGION}")
+    - NEW_CONTAINER_DEFINITION=$(echo $TASK_DEFINITION | jq --arg IMAGE "$REPOSITORY_URL:$IMAGE_TAG" '.taskDefinition.containerDefinitions[0].image = $IMAGE | .taskDefinition.containerDefinitions[0] | .cpu=512 | .memory = 1024')
+    - echo "Registering new container definition..."
+    - NEW_TASK_DEFINITION_ARN=$(aws ecs register-task-definition --region "${AWS_DEFAULT_REGION}" --family "${TASK_DEFINITION_NAME}" --container-definitions "${NEW_CONTAINER_DEFINITION}" --query 'taskDefinition.taskDefinitionArn' --output text)
+    - TASK_DEFINITION_ARN_LIST=$(aws ecs list-task-definitions --family-prefix "${TASK_DEFINITION_NAME}" --region "${AWS_DEFAULT_REGION}" --status ACTIVE --query 'taskDefinitionArns' --output json)
+    - LATEST_REVISION=$(echo $TASK_DEFINITION_ARN_LIST | jq -r '.[-1]')
+    # Loop through older revisions and deregister them
+    - |
+      for REVISION in $(echo "${TASK_DEFINITION_ARN_LIST}" | jq -r '.[]'); do
+        if [ "${REVISION}" != "${LATEST_REVISION}" ]; then
+          echo "Deregistering old revision: ${REVISION}"
+          aws ecs deregister-task-definition --region "${AWS_DEFAULT_REGION}" --task-definition "${REVISION}"
+        fi
+      done
+    - echo "New ECS Task Definition ARN:${NEW_TASK_DEFINITION_ARN}"
+    - jq --arg newTaskDef "$NEW_TASK_DEFINITION_ARN" '.version |= 1 | .Resources[].TargetService.Properties.TaskDefinition = $newTaskDef' appspec.json > tmpfile && mv tmpfile appspec.json
+    - cat create-deployment.json
+    - cat appspec.json
+    - zip appspec.zip appspec.json
+    - size1=$(du -h appspec.json | cut -f1)
+    - size2=$(du -h appspec.zip | cut -f1)
+    - echo "Size of appspec.json:$size1"
+    - echo "Size of appspec.zip:$size2"
+    - aws s3 cp appspec.json s3://api-app-deployment/
+    - echo "Creating Codedeploy deployment .."
+    - aws deploy create-deployment --application-name "AppECS-da-cluster-newsvc" --cli-input-json file://create-deployment.json --region "us-east-1" --deployment-config-name "CodeDeployDefault.ECSAllAtOnce"
+  only:
+    - ecs-test1
+  tags:
+    - blue-green
+    - cicd
+
+
+
+
+Here we are just updating the task definition with latest revision and using for loop which is de-registering the older revisions, so whenever pipeline triggers it will take the latest revision 
+(active one).
+
+
+Using this command, we are updating the task definition ARN in the appspec.json file which will be used for codedeploy.
+- jq --arg newTaskDef "$NEW_TASK_DEFINITION_ARN" '.version |= 1 | .Resources[].TargetService.Properties.TaskDefinition = $newTaskDef' appspec.json > tmpfile && mv tmpfile appspec.json
+
+
+
+
+
+
+
+
+{
+  "version": 1,
+  "Resources": [
+    {
+      "TargetService": {
+        "Type": "AWS::ECS::Service",
+        "Properties": {
+          "TaskDefinition": "<TASK_DEFINTION>",
+          "LoadBalancerInfo": {
+            "ContainerName": "<CONTAINER NAME>",
+            "ContainerPort": port-number
+          }
+        }
+      }
+    }
+  ]
+}
+ 
+ Then push the appspec.json file to S3 bucket.
+
+
+For deployment, create a deployment file e.g. create-deployment.json like below
+{
+   "applicationName":"<CODEDEPLOY APPLICATION NAME>",
+   "deploymentGroupName":"<CODEDEPLOY DEPLOYMENT GROUP>",
+   "deploymentConfigName":"<CodeDeploy COnfiguration>",
+   "revision":{
+      "revisionType":"S3",
+      "s3Location":{
+         "bundleType":"JSON",
+         "bucket":"<BUCKET NAME>",
+         "key":"appspec.json"
+      }
+   }
+}
+For more information of how to create deployment here
+Verify Blue-Green deployment is working
+Commit the changes on your repository and check your jobs on gitlab pipelines
+Once it is successfully passed then AWS Console.
+Go to AWS Codedeploy —> Deployments —> Deployment ID 
+After Deployment succeeded, the page will appear like this which shows Desired output of the Blue-green deployment.
+If you want to shift all your traffic to your replacement task, you can click on Terminate original task which will skip step 3 of 1hr.
+
+
+
+
+
+
+
