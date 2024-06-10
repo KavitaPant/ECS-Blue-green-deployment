@@ -1,0 +1,36 @@
+# variables
+variables:
+  AWS_DEFAULT_REGION: "us-east-1"
+  GITLAB_REPO: "https://gitlab.block-stars-dev.com/r_site/r_site_api.git"
+  CODECOMMIT_REPO: "https://git-codecommit.${AWS_DEFAULT_REGION}.amazonaws.com/v1/repos/gitlab_repo"
+  REPO_DIR: "r_site_api"
+  GITLAB_TOKEN: $GITLAB_TOKEN
+
+stages:
+  - push_to_codecommit
+
+#  Clone repo from Gitlab to Codecommit
+push_to_codecommit:
+  stage: push_to_codecommit
+  image: amazonlinux:2 # Use a Docker image that has python and other utilities pre-installed
+  before_script:
+    # Install AWS CLI
+    - yum install -y git awscli
+    # Configure AWS CLI with environment variables (ensure these are set in GitLab CI/CD settings)
+    - aws configure set aws_access_key_id $AWS_ACCESS_KEY_ID
+    - aws configure set aws_secret_access_key $AWS_SECRET_ACCESS_KEY
+    - aws configure set default.region $AWS_DEFAULT_REGION
+    # Configure git to use AWS CodeCommit credential helper
+    - git config --global credential.helper '!aws codecommit credential-helper $@'
+    - git config --global credential.UseHttpPath true
+    - git clone -b $CI_COMMIT_BRANCH https://oauth2:$GITLAB_TOKEN@gitlab.block-stars-dev.com/r_site/r_site_api.git
+    - cd $REPO_DIR/
+  script:
+    - git remote add codecommit $CODECOMMIT_REPO
+    - git push $CODECOMMIT_REPO --all
+    - echo "Check the source code on codecommit1"
+  only:
+    - ecs-test1  
+  tags:
+    - blue
+    - green
